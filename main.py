@@ -101,13 +101,28 @@ async def translate_video(
         tts = gTTS(text=translated_text, lang=gtts_lang, slow=False)
         tts.save(str(tts_path))
 
-        subprocess.run([
-            "ffmpeg", "-i", str(video_path),
+        # የቪዲዮ ርዝምና ወጣ
+        probe = subprocess.run([
+            "ffprobe", "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            str(video_path)
+        ], capture_output=True, text=True)
+        video_duration = float(probe.stdout.strip()) if probe.stdout.strip() else None
+
+        # TTS ድምፅን ከቪዲዮ ርዝምና ጋር ያስተካክላል (አጭር ከሆነ ዝምታ ይጨምራል፣ ረዘም ካለ ይቆርጣል)
+        ffmpeg_cmd = [
+            "ffmpeg",
+            "-i", str(video_path),
             "-i", str(tts_path),
             "-c:v", "copy",
-            "-map", "0:v:0", "-map", "1:a:0",
-            "-shortest", str(output_path), "-y"
-        ], check=True, capture_output=True)
+            "-filter_complex",
+            f"[1:a]apad,atrim=0:{video_duration}[a]" if video_duration else "[1:a]apad[a]",
+            "-map", "0:v:0",
+            "-map", "[a]",
+            str(output_path), "-y"
+        ]
+        subprocess.run(ffmpeg_cmd, check=True, capture_output=True)
 
         for f in [video_path, audio_path, tts_path]:
             if f.exists():
