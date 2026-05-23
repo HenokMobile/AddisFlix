@@ -164,7 +164,8 @@ translateBtn.addEventListener('click', async () => {
       progressSection.style.display = 'none';
       resultSection.style.display = 'block';
 
-      document.getElementById('original-text').textContent = data.original_text;
+      const segInfo = data.segment_count ? ` (${data.segment_count} አረፍተ ነገሮች)` : "";
+      document.getElementById('original-text').textContent = data.original_text + segInfo;
       document.getElementById('translated-text').textContent = data.translated_text;
 
       const resultVideo = document.getElementById('result-video');
