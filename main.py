@@ -116,11 +116,9 @@ def separate_vocals(audio_path: Path, work_dir: Path):
     demucs_out = work_dir / "demucs_out"
     demucs_out.mkdir(exist_ok=True)
 
-    # --segment=30 → ረጅም ድምፅ በ30 ሴኮንድ ክፍሎች ይሰራዋል (ፈጣን + ትንሽ RAM)
     subprocess.run([
         "python", "-m", "demucs",
         "--two-stems=vocals",
-        "--segment=30",
         "--out", str(demucs_out),
         str(audio_path)
     ], check=True, capture_output=True)
