@@ -37,4 +37,4 @@ externalPort = 80
 
 [deployment]
 deploymentTarget = "autoscale"
-run = ["gunicorn", "--bind=0.0.0.0:5000", "--reuse-port", "--workers=2", "--worker-class=uvicorn.workers.UvicornWorker", "--timeout=300", "main:app"]
+run = ["gunicorn", "--bind=0.0.0.0:5000", "--reuse-port", "--workers=2", "--worker-class=uvicorn.workers.UvicornWorker", "--timeout=900", "main:app"]

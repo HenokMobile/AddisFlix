@@ -116,9 +116,11 @@ def separate_vocals(audio_path: Path, work_dir: Path):
     demucs_out = work_dir / "demucs_out"
     demucs_out.mkdir(exist_ok=True)
 
+    # --segment=30 → ረጅም ድምፅ በ30 ሴኮንድ ክፍሎች ይሰራዋል (ፈጣን + ትንሽ RAM)
     subprocess.run([
         "python", "-m", "demucs",
         "--two-stems=vocals",
+        "--segment=30",
         "--out", str(demucs_out),
         str(audio_path)
     ], check=True, capture_output=True)
@@ -149,6 +151,9 @@ async def translate_video(
     if not video.content_type or not video.content_type.startswith("video/"):
         raise HTTPException(status_code=400, detail="ቪዲዮ ፋይል ብቻ ይጫኑ")
 
+    MAX_FILE_MB = 500
+    MAX_DURATION_MIN = 10
+
     session_id = str(uuid.uuid4())
     suffix = Path(video.filename).suffix or ".mp4"
     video_path  = UPLOAD_DIR / f"{session_id}_input{suffix}"
@@ -158,11 +163,24 @@ async def translate_video(
     work_dir.mkdir(exist_ok=True)
 
     try:
-        # 1. ቪዲዮ ቀምጥ
+        # 1. ቪዲዮ ቀምጥ (ፋይል መጠን ስንጫን እናረጋግጣለን)
+        content = await video.read()
+        size_mb = len(content) / (1024 * 1024)
+        if size_mb > MAX_FILE_MB:
+            raise HTTPException(
+                status_code=400,
+                detail=f"ፋይሉ በጣም ትልቅ ነው ({size_mb:.0f}MB)። ከ{MAX_FILE_MB}MB በታች ይጫኑ።"
+            )
         async with aiofiles.open(video_path, "wb") as f:
-            await f.write(await video.read())
+            await f.write(content)
+        del content
 
         video_duration = get_duration(video_path)
+        if video_duration > MAX_DURATION_MIN * 60:
+            raise HTTPException(
+                status_code=400,
+                detail=f"ቪዲዮው ረጅም ነው ({video_duration/60:.1f} ደቂቃ)። ከ{MAX_DURATION_MIN} ደቂቃ በታች ይጫኑ።"
+            )
 
         # 2. ድምፅ ወጣ (44100 Hz stereo — Demucs ይፈልጋል)
         subprocess.run([
