@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="am">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AddisFlix - የቪዲዮ ተርጓሚ</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header>
+    <div class="logo">
+      <span class="logo-icon">🎬</span>
+      <span class="logo-text">AddisFlix</span>
+      <span class="logo-sub">ቪዲዮ ተርጓሚ</span>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <h1>ቪዲዮዎን ወደ ማንኛውም ቋንቋ ተርጉሙ</h1>
+      <p>AI ድምፅ ቀጥታ ትርጉም - Subtitle ሳይሆን ሙሉ ድምፅ!</p>
+    </section>
+
+    <section class="upload-section">
+      <div class="card" id="dropzone">
+        <div class="drop-area" id="drop-area">
+          <div class="drop-icon">📁</div>
+          <p class="drop-text">ቪዲዮ ፋይል ይጎትቱ ወይም ይምረጡ</p>
+          <p class="drop-hint">MP4, AVI, MOV, MKV ይደገፋሉ</p>
+          <input type="file" id="video-input" accept="video/*" hidden />
+          <button class="btn btn-outline" onclick="document.getElementById('video-input').click()">
+            ፋይል ምረጥ
+          </button>
+        </div>
+
+        <div class="file-preview" id="file-preview" style="display:none;">
+          <video id="preview-video" controls></video>
+          <div class="file-info">
+            <span class="file-name" id="file-name"></span>
+            <button class="btn-icon" id="remove-file" title="አስወግድ">✕</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card settings-card">
+        <h2>የትርጉም ቅንብሮች</h2>
+
+        <div class="form-group">
+          <label for="target-lang">ወደ ምን ቋንቋ ይተርጉሙ?</label>
+          <select id="target-lang">
+            <option value="">ቋንቋ ይምረጡ...</option>
+          </select>
+        </div>
+
+        <button class="btn btn-primary" id="translate-btn" disabled>
+          <span class="btn-icon-left">🔄</span>
+          ትርጉም ጀምር
+        </button>
+      </div>
+    </section>
+
+    <section class="progress-section" id="progress-section" style="display:none;">
+      <div class="card progress-card">
+        <h2>እየሰራ ነው...</h2>
+        <div class="steps">
+          <div class="step" id="step-1">
+            <div class="step-icon">🎤</div>
+            <div class="step-info">
+              <span class="step-title">ድምፅ እያሰማ ነው</span>
+              <span class="step-desc">Whisper AI ድምፁን ወደ ጽሑፍ እየቀየረ...</span>
+            </div>
+            <div class="step-status">⏳</div>
+          </div>
+          <div class="step" id="step-2">
+            <div class="step-icon">🌐</div>
+            <div class="step-info">
+              <span class="step-title">እየተረጎመ ነው</span>
+              <span class="step-desc">ጽሑፉን ወደ የተመረጠው ቋንቋ እየቀየረ...</span>
+            </div>
+            <div class="step-status">⏸️</div>
+          </div>
+          <div class="step" id="step-3">
+            <div class="step-icon">🔊</div>
+            <div class="step-info">
+              <span class="step-title">ድምፅ እየፈጠረ ነው</span>
+              <span class="step-desc">የተተረጎመውን ጽሑፍ ወደ ድምፅ እየቀየረ...</span>
+            </div>
+            <div class="step-status">⏸️</div>
+          </div>
+          <div class="step" id="step-4">
+            <div class="step-icon">🎬</div>
+            <div class="step-info">
+              <span class="step-title">ቪዲዮ እያዋሃደ ነው</span>
+              <span class="step-desc">ድምፁን ከቪዲዮ ጋር እያዋሃደ...</span>
+            </div>
+            <div class="step-status">⏸️</div>
+          </div>
+        </div>
+        <div class="progress-bar-wrap">
+          <div class="progress-bar" id="progress-bar"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="result-section" id="result-section" style="display:none;">
+      <div class="card result-card">
+        <div class="result-header">
+          <span class="result-icon">✅</span>
+          <h2>ትርጉሙ ተጠናቋል!</h2>
+        </div>
+
+        <div class="transcript-box">
+          <div class="transcript-col">
+            <h3>የዋናው ቪዲዮ ጽሑፍ</h3>
+            <p id="original-text"></p>
+          </div>
+          <div class="transcript-divider">→</div>
+          <div class="transcript-col">
+            <h3>የተተረጎመ ጽሑፍ</h3>
+            <p id="translated-text"></p>
+          </div>
+        </div>
+
+        <video id="result-video" controls></video>
+
+        <div class="result-actions">
+          <a id="download-btn" class="btn btn-primary" download>
+            ⬇️ ቪዲዮ አውርድ
+          </a>
+          <button class="btn btn-outline" id="new-translate-btn">
+            🔄 አዲስ ቪዲዮ ተርጉም
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <section class="error-section" id="error-section" style="display:none;">
+      <div class="card error-card">
+        <div class="error-icon">❌</div>
+        <h2>ስህተት ተከሰተ</h2>
+        <p id="error-message"></p>
+        <button class="btn btn-outline" id="retry-btn">እንደገና ሞክር</button>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>AddisFlix &copy; 2024 — AI ቪዲዮ ተርጓሚ | Powered by Whisper + gTTS</p>
+  </footer>
+
+  <script src="/script.js"></script>
+</body>
+</html>
