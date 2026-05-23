@@ -1,7 +1,7 @@
 import os
 import uuid
 import subprocess
-import tempfile
+import shutil
 from pathlib import Path
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -53,25 +53,20 @@ async def get_languages():
     return {"languages": SUPPORTED_LANGUAGES}
 
 
-def get_audio_duration(path: Path) -> float:
-    """FFprobe ተጠቅሞ የድምፅ ፋይል ርዝምና ያወጣል"""
-    result = subprocess.run([
+def get_duration(path: Path) -> float:
+    r = subprocess.run([
         "ffprobe", "-v", "error",
         "-show_entries", "format=duration",
         "-of", "default=noprint_wrappers=1:nokey=1",
         str(path)
     ], capture_output=True, text=True)
     try:
-        return float(result.stdout.strip())
+        return float(r.stdout.strip())
     except Exception:
         return 0.0
 
 
-def build_atempo_filter(ratio: float) -> str:
-    """
-    ffmpeg atempo 0.5-2.0 ብቻ ይቀበላል።
-    ከ2.0 በላይ ወይም ከ0.5 በታች ሲሆን filter ይደረደራሉ።
-    """
+def build_atempo(ratio: float) -> str:
     filters = []
     if ratio > 2.0:
         while ratio > 2.0:
@@ -88,39 +83,62 @@ def build_atempo_filter(ratio: float) -> str:
     return ",".join(filters)
 
 
-def adjust_tts_speed(tts_path: Path, target_duration: float, out_path: Path):
-    """
-    TTS ድምፅ ርዝምና ከቪዲዮ segment duration ጋር ያስተካክላል።
-    - TTS ረዘም ከሆነ: ፈጥኖ ያናግራል (max 2.5x)
-    - TTS አጭር ከሆነ: ቀስ ያናግራል ወይም ዝምታ ይጨምራል
-    """
-    tts_duration = get_audio_duration(tts_path)
-    if tts_duration <= 0 or target_duration <= 0:
-        subprocess.run(["cp", str(tts_path), str(out_path)], check=True)
+def adjust_tts(tts_path: Path, target_dur: float, out_path: Path):
+    """TTS ድምፅ ርዝምና ከ segment ጋር ያስተካክላል"""
+    tts_dur = get_duration(tts_path)
+    if tts_dur <= 0 or target_dur <= 0:
+        shutil.copy(str(tts_path), str(out_path))
         return
 
-    ratio = tts_duration / target_duration
-
-    # ከ2.5x በላይ ፈጥኖ ማናገር አይቻልም — ዝምታ እናጥቃዋለን
-    if ratio > 2.5:
-        ratio = 2.5
+    ratio = tts_dur / target_dur
+    ratio = min(ratio, 2.5)
 
     if abs(ratio - 1.0) < 0.05:
-        # ልዩነቱ ትንሽ ነው — ቀጥታ ይጠቀማል
-        subprocess.run(["cp", str(tts_path), str(out_path)], check=True)
+        shutil.copy(str(tts_path), str(out_path))
         return
 
-    atempo = build_atempo_filter(ratio)
-
-    # ፍጥነት ቀይሮ ያቀናብራል ከዚያ ዝምታ ቢጠፋ ይጨምራል
+    atempo = build_atempo(ratio)
     subprocess.run([
         "ffmpeg", "-i", str(tts_path),
         "-filter_complex",
-        f"[0:a]{atempo},apad=whole_dur={target_duration}[a]",
+        f"[0:a]{atempo},apad=whole_dur={target_dur}[a]",
         "-map", "[a]",
-        "-t", str(target_duration),
+        "-t", str(target_dur),
         str(out_path), "-y"
     ], check=True, capture_output=True)
+
+
+def separate_vocals(audio_path: Path, work_dir: Path):
+    """
+    Demucs ተጠቅሞ ቃላት ድምፅ ከ Background ይለያቸዋል።
+    ይመልሳል: (vocals_path, no_vocals_path)
+    """
+    demucs_out = work_dir / "demucs_out"
+    demucs_out.mkdir(exist_ok=True)
+
+    subprocess.run([
+        "python", "-m", "demucs",
+        "--two-stems=vocals",
+        "--out", str(demucs_out),
+        str(audio_path)
+    ], check=True, capture_output=True)
+
+    # Demucs output: demucs_out/htdemucs/<stem_name>/vocals.wav + no_vocals.wav
+    stem_dirs = list(demucs_out.glob("*"))
+    if not stem_dirs:
+        raise RuntimeError("Demucs output አልተገኘም")
+
+    model_dir = stem_dirs[0]
+    audio_stem = audio_path.stem
+    result_dir = model_dir / audio_stem
+
+    vocals_path    = result_dir / "vocals.wav"
+    no_vocals_path = result_dir / "no_vocals.wav"
+
+    if not vocals_path.exists() or not no_vocals_path.exists():
+        raise RuntimeError(f"Demucs ፋይሎች አልተገኙም: {result_dir}")
+
+    return vocals_path, no_vocals_path
 
 
 @app.post("/api/translate-video")
@@ -133,51 +151,58 @@ async def translate_video(
 
     session_id = str(uuid.uuid4())
     suffix = Path(video.filename).suffix or ".mp4"
-    video_path = UPLOAD_DIR / f"{session_id}_input{suffix}"
-    audio_path = UPLOAD_DIR / f"{session_id}_audio.wav"
+    video_path  = UPLOAD_DIR / f"{session_id}_input{suffix}"
+    audio_path  = UPLOAD_DIR / f"{session_id}_audio.wav"
     output_path = OUTPUT_DIR / f"{session_id}_output.mp4"
-    seg_dir = UPLOAD_DIR / session_id
-    seg_dir.mkdir(exist_ok=True)
+    work_dir    = UPLOAD_DIR / session_id
+    work_dir.mkdir(exist_ok=True)
 
     try:
-        # ቪዲዮ ቀምጥ
+        # 1. ቪዲዮ ቀምጥ
         async with aiofiles.open(video_path, "wb") as f:
-            content = await video.read()
-            await f.write(content)
+            await f.write(await video.read())
 
-        # የቪዲዮ ርዝምና
-        video_duration = get_audio_duration(video_path)
+        video_duration = get_duration(video_path)
 
-        # ድምፅ ወጣ
+        # 2. ድምፅ ወጣ (44100 Hz stereo — Demucs ይፈልጋል)
         subprocess.run([
             "ffmpeg", "-i", str(video_path),
             "-vn", "-acodec", "pcm_s16le",
-            "-ar", "16000", "-ac", "1",
+            "-ar", "44100", "-ac", "2",
             str(audio_path), "-y"
         ], check=True, capture_output=True)
 
-        # Whisper — segment timestamps ጋር ትርጉም ወጣ
+        # 3. Demucs — ቃላት vs Background ይለያቸዋል
+        print("Demucs: ድምፅ እየለያ...")
+        vocals_path, bg_path = separate_vocals(audio_path, work_dir)
+
+        # 4. Whisper — vocals track ብቻ ትርጉም ወጣ (ትክክለኛ timestamps)
+        vocals_16k = work_dir / "vocals_16k.wav"
+        subprocess.run([
+            "ffmpeg", "-i", str(vocals_path),
+            "-ar", "16000", "-ac", "1",
+            str(vocals_16k), "-y"
+        ], check=True, capture_output=True)
+
         model = get_whisper_model()
-        result = model.transcribe(str(audio_path), word_timestamps=False)
+        result = model.transcribe(str(vocals_16k), word_timestamps=False)
         segments = result.get("segments", [])
         detected_lang = result.get("language", "en")
 
         if not segments:
             raise HTTPException(status_code=400, detail="ድምፅ ሊሰማ አልቻለም")
 
-        # እያንዳንዱ segment ይተረጉምና TTS ይፈጥራል
-        original_texts = []
-        translated_texts = []
-        adjusted_segs = []  # (start, adjusted_wav_path)
-
+        # 5. እያንዳንዱ segment ትርጉምና TTS
         gtts_lang = target_language.split("-")[0]
+        original_texts   = []
+        translated_texts = []
+        tts_segments     = []  # (start_sec, adjusted_wav_path)
 
         for i, seg in enumerate(segments):
             seg_start = seg["start"]
-            seg_end = seg["end"]
-            seg_duration = seg_end - seg_start
-            seg_text = seg["text"].strip()
-
+            seg_end   = seg["end"]
+            seg_dur   = seg_end - seg_start
+            seg_text  = seg["text"].strip()
             if not seg_text:
                 continue
 
@@ -185,83 +210,86 @@ async def translate_video(
 
             # ትርጉም
             try:
-                translated = GoogleTranslator(
-                    source=detected_lang, target=target_language
-                ).translate(seg_text)
+                translated = GoogleTranslator(source=detected_lang, target=target_language).translate(seg_text)
             except Exception:
                 try:
-                    translated = GoogleTranslator(
-                        source="auto", target=target_language
-                    ).translate(seg_text)
+                    translated = GoogleTranslator(source="auto", target=target_language).translate(seg_text)
                 except Exception:
                     translated = seg_text
-
             translated_texts.append(translated)
 
-            # TTS ድምፅ
-            tts_path = seg_dir / f"tts_{i}.mp3"
-            adjusted_path = seg_dir / f"adj_{i}.wav"
-
+            # TTS + ፍጥነት ቅናሽ/ጭማሪ
+            tts_raw = work_dir / f"tts_{i}.mp3"
+            tts_adj = work_dir / f"adj_{i}.wav"
             try:
-                tts = gTTS(text=translated, lang=gtts_lang, slow=False)
-                tts.save(str(tts_path))
-                adjust_tts_speed(tts_path, seg_duration, adjusted_path)
-                adjusted_segs.append((seg_start, adjusted_path))
+                gTTS(text=translated, lang=gtts_lang, slow=False).save(str(tts_raw))
+                adjust_tts(tts_raw, seg_dur, tts_adj)
+                tts_segments.append((seg_start, tts_adj))
             except Exception as e:
                 print(f"Segment {i} TTS ስህተት: {e}")
                 continue
 
-        if not adjusted_segs:
+        if not tts_segments:
             raise HTTPException(status_code=500, detail="ድምፅ መፍጠር አልተቻለም")
 
-        # ሁሉም segments አንድ audio track ውስጥ ያስቀምጣቸዋል
-        # መጀመሪያ silent base track ፍጠር
-        silent_path = seg_dir / "silent_base.wav"
+        # 6. TTS segments → አንድ audio track (ዝምታ base ላይ overlay)
+        silent_path = work_dir / "silent.wav"
         subprocess.run([
             "ffmpeg", "-f", "lavfi",
             "-i", f"anullsrc=r=44100:cl=stereo:d={video_duration}",
             str(silent_path), "-y"
         ], check=True, capture_output=True)
 
-        # ffmpeg filter_complex ለ overlay ድምፆች
-        inputs = ["-i", str(silent_path)]
+        inputs       = ["-i", str(silent_path)]
         filter_parts = []
-        mix_labels = ["[0:a]"]
+        mix_labels   = ["[0:a]"]
 
-        for idx, (start_sec, adj_path) in enumerate(adjusted_segs):
+        for idx, (start_sec, adj_path) in enumerate(tts_segments):
             inputs += ["-i", str(adj_path)]
             delay_ms = int(start_sec * 1000)
             label = f"[a{idx+1}]"
             filter_parts.append(
-                f"[{idx+1}:a]adelay={delay_ms}|{delay_ms},apad=whole_dur={video_duration}{label}"
+                f"[{idx+1}:a]adelay={delay_ms}|{delay_ms},"
+                f"apad=whole_dur={video_duration}{label}"
             )
             mix_labels.append(label)
 
-        n_inputs = len(mix_labels)
-        mix_label = "[mixed]"
+        n = len(mix_labels)
+        tts_mix_label = "[tts_mixed]"
         filter_parts.append(
-            "".join(mix_labels) + f"amix=inputs={n_inputs}:duration=first:normalize=0{mix_label}"
+            "".join(mix_labels) +
+            f"amix=inputs={n}:duration=first:normalize=0{tts_mix_label}"
         )
 
-        filter_complex = ";".join(filter_parts)
-
-        # mixed audio ፋይል
-        mixed_audio_path = seg_dir / "mixed_audio.wav"
+        tts_track = work_dir / "tts_track.wav"
         subprocess.run(
             ["ffmpeg"] + inputs + [
-                "-filter_complex", filter_complex,
-                "-map", mix_label,
+                "-filter_complex", ";".join(filter_parts),
+                "-map", tts_mix_label,
                 "-t", str(video_duration),
-                str(mixed_audio_path), "-y"
+                str(tts_track), "-y"
             ],
             check=True, capture_output=True
         )
 
-        # ቪዲዮ ከ mixed audio ጋር ያዋሃዳቸዋል (ዋናው ድምፅ ይጠፋል)
+        # 7. TTS track + Background ድምፅ ያዋሃዳቸዋል
+        final_audio = work_dir / "final_audio.wav"
+        subprocess.run([
+            "ffmpeg",
+            "-i", str(tts_track),
+            "-i", str(bg_path),
+            "-filter_complex",
+            "[0:a][1:a]amix=inputs=2:duration=first:normalize=0[out]",
+            "-map", "[out]",
+            "-t", str(video_duration),
+            str(final_audio), "-y"
+        ], check=True, capture_output=True)
+
+        # 8. ቪዲዮ + final audio (ዋናው ድምፅ ሳይኖር)
         subprocess.run([
             "ffmpeg",
             "-i", str(video_path),
-            "-i", str(mixed_audio_path),
+            "-i", str(final_audio),
             "-c:v", "copy",
             "-map", "0:v:0",
             "-map", "1:a:0",
@@ -269,9 +297,8 @@ async def translate_video(
             str(output_path), "-y"
         ], check=True, capture_output=True)
 
-        # ጊዜያዊ ፋይሎችን ደምስስ
-        import shutil
-        shutil.rmtree(str(seg_dir), ignore_errors=True)
+        # ጊዜያዊ ፋይሎች ደምስስ
+        shutil.rmtree(str(work_dir), ignore_errors=True)
         for f in [video_path, audio_path]:
             if f.exists():
                 f.unlink()
@@ -282,20 +309,18 @@ async def translate_video(
             "original_text": " | ".join(original_texts[:5]) + ("..." if len(original_texts) > 5 else ""),
             "translated_text": " | ".join(translated_texts[:5]) + ("..." if len(translated_texts) > 5 else ""),
             "detected_language": detected_lang,
-            "segment_count": len(adjusted_segs),
+            "segment_count": len(tts_segments),
             "download_url": f"/api/download/{session_id}"
         })
 
     except subprocess.CalledProcessError as e:
-        import shutil
-        shutil.rmtree(str(seg_dir), ignore_errors=True)
+        shutil.rmtree(str(work_dir), ignore_errors=True)
         for f in [video_path, audio_path]:
             if f.exists():
                 f.unlink()
         raise HTTPException(status_code=500, detail=f"ቪዲዮ ማቀናበሪያ ስህተት: {e.stderr.decode()[:500]}")
     except Exception as e:
-        import shutil
-        shutil.rmtree(str(seg_dir), ignore_errors=True)
+        shutil.rmtree(str(work_dir), ignore_errors=True)
         for f in [video_path, audio_path]:
             if f.exists():
                 f.unlink()

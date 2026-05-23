@@ -104,12 +104,12 @@ translateBtn.addEventListener('click', async () => {
   translateBtn.disabled = true;
 
   // ሁሉም ደረጃዎች ዳግም አስጀምር
-  [1, 2, 3, 4].forEach(i => setStep(i, 'waiting'));
+  [1, 2, 3, 4, 5].forEach(i => setStep(i, 'waiting'));
   setProgress(0);
 
-  // ደረጃ 1 ጀምር
+  // ደረጃ 1 ጀምር (Demucs — ረጅም ጊዜ ይወስዳል)
   setStep(1, 'active');
-  setProgress(10);
+  setProgress(5);
 
   // ቅጹ ፍጠር
   const formData = new FormData();
@@ -117,33 +117,26 @@ translateBtn.addEventListener('click', async () => {
   formData.append('target_language', targetLang.value);
 
   try {
-    // ደረጃ ለውጥ animation (backend ሁሉን አንድ ጊዜ ያደርጋል)
-    const progressTimer = setTimeout(() => {
-      setStep(1, 'done');
-      setStep(2, 'active');
-      setProgress(40);
-    }, 3000);
-
-    const progressTimer2 = setTimeout(() => {
-      setStep(2, 'done');
-      setStep(3, 'active');
-      setProgress(65);
-    }, 8000);
-
-    const progressTimer3 = setTimeout(() => {
-      setStep(3, 'done');
-      setStep(4, 'active');
-      setProgress(85);
-    }, 12000);
+    // Demucs ረጅም ጊዜ ስለሚወስድ timers ይረዝማሉ
+    const t1 = setTimeout(() => {
+      setStep(1, 'done'); setStep(2, 'active'); setProgress(30);
+    }, 20000);
+    const t2 = setTimeout(() => {
+      setStep(2, 'done'); setStep(3, 'active'); setProgress(55);
+    }, 35000);
+    const t3 = setTimeout(() => {
+      setStep(3, 'done'); setStep(4, 'active'); setProgress(70);
+    }, 50000);
+    const t4 = setTimeout(() => {
+      setStep(4, 'done'); setStep(5, 'active'); setProgress(88);
+    }, 65000);
 
     const res = await fetch('/api/translate-video', {
       method: 'POST',
       body: formData,
     });
 
-    clearTimeout(progressTimer);
-    clearTimeout(progressTimer2);
-    clearTimeout(progressTimer3);
+    [t1, t2, t3, t4].forEach(clearTimeout);
 
     if (!res.ok) {
       const err = await res.json();
@@ -157,6 +150,7 @@ translateBtn.addEventListener('click', async () => {
     setStep(2, 'done');
     setStep(3, 'done');
     setStep(4, 'done');
+    setStep(5, 'done');
     setProgress(100);
 
     // ውጤት አሳይ
